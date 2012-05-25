@@ -1,0 +1,219 @@
+#!/bin/sh
+
+SRC_VOL=
+HOST=
+DRY_RUN=
+PURGE_SS=
+VERBOSE=
+MBUFFER=
+EXCLUDES="/usr/local/etc/zfs-sync.excludes"
+
+usage()
+{
+    echo "USAGE: $0 [-s volume] [-p type] [-h host] [-n] [-v] [-x excludes] filesystem"
+    printf "\t[-s vol]\tSource zfs volume\n"
+    printf "\t[-h host]\tDestination hostname (for remote syncing)\n"
+    printf "\t[-p]\t\tPurge stale snaphots on the destination (that are more recent that the latest common ss)\n"
+    printf "\t[-n]\t\tDry run\n"
+    printf "\t[-v]\t\tVerbose mode\n"
+    printf "\t[-m]\t\tEnable mbuffer\n"
+    printf "\t[-x excludes]\tFile with excluded filesystems, one per line (default: ${EXCLUDES})\n"
+    printf "\tfilesystem\tDestination zfs filesystem\n"
+    exit 1
+}
+
+while getopts "s:h:pnvmx:" _opt; do
+    case "$_opt" in
+    s) SRC_VOL="$OPTARG" ;;
+    h) HOST="$OPTARG" ; ssh="ssh ${HOST} " ;;
+    p) PURGE_SS="YES" ;;
+    n) DRY_RUN="YES" ;;
+    v) VERBOSE="YES" ;;
+    m) MBUFFER="YES" ;;
+    x) EXCLUDES="$OPTARG" ;;
+    *) usage ;;
+    esac
+done
+shift $(($OPTIND - 1))
+if [ $# -ne 1 ]; then
+    usage
+fi
+DEST_FS="$1"
+
+
+# $1 - command(s) to run
+run()
+{
+    if [ -n "${DRY_RUN}" -o -n "${VERBOSE}" ]; then
+        echo "$1"
+    fi
+    if [ -n "${DRY_RUN}" ]; then
+        return
+    fi
+
+    eval "$1" || \
+        { echo "Error executing command: $1"; exit 1; }
+}
+
+# $1 - command(s) to run
+run_dest()
+{
+    CMD="$1"
+    if [ -n "${HOST}" ]; then
+        CMD="ssh ${HOST} ${CMD}"
+    fi
+
+    run "${CMD}"
+}
+
+
+# $1 - source snapshot (and zfs send args)
+# $2 - destination filesystem (and zfs receive args)
+send()
+{
+    mbuffer_args="-q -s 128k"
+
+    CMD="zfs send $1 | "
+    if [ -n "${HOST}" ]; then
+        if [ -n "${MBUFFER}" ]; then
+            CMD="${CMD}mbuffer ${mbuffer_args} | "
+        fi
+        ssh_args="-c arcfour128"
+        CMD="${CMD}ssh ${ssh_args} ${HOST} \""
+    fi
+
+    if [ -n "${MBUFFER}" ]; then
+        CMD="${CMD}mbuffer ${mbuffer_args} | "
+    fi
+
+    recv_args=
+    if [ -n "${VERBOSE}" ]; then
+        recv_args="-v "
+    fi
+    recv_args="${recv_args}-F"
+    CMD="${CMD}zfs receive ${recv_args} $2"
+
+    if [ -n "${HOST}" ]; then
+        CMD="${CMD}\""
+    fi
+
+    run "${CMD}"
+}
+
+
+
+# get all the snapshots (once each for source & dest)
+# these are the only zfs calls (besides send & recv)
+SRC_LIST=$( zfs list -r -H -o name -t snapshot -s creation ${SRC_VOL} 2>/dev/null )
+DST_LIST=$( ${ssh}zfs list -r -H -o name -t snapshot -s creation "${DEST_FS}" 2>/dev/null )
+
+# trim the destination (recursively) from the list of sources (when we aren't shipping to another host)
+if [ -z "${HOST}" ]; then
+    SRC_LIST=$( echo "${SRC_LIST}" | grep -v -e "^${DEST_FS}" )
+fi
+
+# derive the filesystems from eash full list (of snapshots)
+SRC_FS_LIST=$( echo "${SRC_LIST}" | cut -s -d @ -f 1 | sort | uniq )
+DST_FS_LIST=$( echo "${DST_LIST}" | cut -s -d @ -f 1 | sort | uniq )
+
+# find destination filesystems not found on the source
+for dest_fs in $( echo "${DST_FS_LIST}" | sed "s|^${DEST_FS}/||g" ); do
+    if [ "${dest_fs}" = "" ]; then continue; fi
+
+    if [ -z "$( echo "${SRC_FS_LIST}" | grep -e "^${dest_fs}$" )" ]; then
+        extra_fs="${extra_fs} ${DEST_FS}/${dest_fs}"
+    fi
+done
+
+if [ -n "${VERBOSE}" -a -n "${extra_fs}" ]; then
+    echo "These destination filesystems do not exist on the source:"
+    echo "${extra_fs}" | sed -e 's|^ *||g' | tr ' ' '\n'
+    echo
+fi
+
+# iterate all the source filesystems
+for src_fs in ${SRC_FS_LIST}; do
+    dest="${DEST_FS}/${src_fs}"
+    dst_first_ss=
+    dst_last_ss=
+    latest_match=
+    extra_snapshots=
+
+    # skip excluded filesystems (if specified)
+    if [ -n "$( echo "${src_fs}" | grep -f "${EXCLUDES}" )" ]; then
+        excluded_fs="${excluded_fs} ${src_fs}"
+        continue
+    fi
+
+    # roll through the destination snapshots
+    for dest_ss in $( echo "${DST_LIST}" | grep -e "^${dest}@" ); do
+        snapshot=$( echo ${dest_ss} | cut -d @ -f 2 )
+        source="${src_fs}@${snapshot}"
+
+        if [ -z "${dst_first_ss}" ]; then
+            dst_first_ss="${snapshot}"
+        fi
+
+        # check to see if this destination snapshot exists on the source
+        if [ -n "$( echo "${SRC_LIST}" | grep -e "^${source}$" )" ]; then
+            latest_match="${snapshot}"
+        else
+            # keep track of extra snapshots no longer on the source
+            extra_snapshots="${extra_snapshots} ${snapshot}"
+        fi
+
+        dst_last_ss="${snapshot}"
+    done
+
+    # find the latest source snapshot
+    src_last_ss=$( echo "${SRC_LIST}" | grep -e "^${src_fs}@" | tail -n 1 | cut -d @ -f 2 )
+
+    # no matching snapshots were found, (re)send filesystem
+    if [ -z "${latest_match}" ]; then
+        if [ -n "$( echo "${DST_FS_LIST}" | grep -e "^${dest}" )" ]; then
+
+            run "zfs destroy -r ${dest}"
+        fi
+
+        # find the earliest source snapshot
+        src_first_ss=$( echo "${SRC_LIST}" | grep -e "^${src_fs}@" | head -n 1 | cut -d @ -f 2 )
+
+        echo "Sending ${src_fs}@${src_first_ss} to ${dest}..."
+        send "${src_fs}@${src_first_ss}" "${dest}"
+        latest_match="${src_first_ss}"
+        dst_last_ss="${src_first_ss}"
+    fi
+
+    # purge snapshots on the destination no longer on the source (newer than the most recent common snapshot)
+    # we do this before the incremental sync to trim out any snapshots that may make the "zfs recv -F" complain
+    if [ -n "${PURGE_SS}" -a -n "${extra_snapshots}" ]; then
+        match_found=
+        for dest_ss in $( echo "${DST_LIST}" | grep -e "^${dest}@" ); do
+            snapshot=$( echo ${dest_ss} | cut -d @ -f 2 )
+
+            if [ -n "${match_found}" ]; then
+                echo "Purging ${dest}@${snapshot}..."
+                run_dest "zfs destroy ${dest}@${snapshot}"
+            elif [ "${snapshot}" = "${latest_match}" ]; then
+               match_found="${snapshot}"
+            fi
+        done
+    fi
+
+    # send incremental, skip if the destination is up-to-date
+    if [ "${dst_last_ss}" = "${src_last_ss}" ]; then
+        echo "Skipping ${dest}, it is current (@${dst_last_ss})..."
+    else
+        echo "Updating ${dest} from ${src_fs}@${src_last_ss} (since @${latest_match})..."
+        send "-I @${latest_match} ${src_fs}@${src_last_ss}" "${dest}"
+    fi
+
+    echo
+done
+
+if [ -n "${VERBOSE}" -a -n "${excluded_fs}" ]; then
+    echo "These filesystems were excluded:"
+    echo "${excluded_fs}" | sed -e 's|^ *||g' | tr ' ' '\n'
+    echo
+fi
+

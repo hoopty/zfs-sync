@@ -6,7 +6,8 @@ DRY_RUN=
 PURGE_SS=
 VERBOSE=
 MBUFFER=
-EXCLUDES="/usr/local/etc/zfs-sync.excludes"
+EXCLUDES=
+EXCLUDES_DEFAULT="/usr/local/etc/zfs-sync.excludes"
 
 usage()
 {
@@ -17,7 +18,7 @@ usage()
     printf "\t[-n]\t\tDry run\n"
     printf "\t[-v]\t\tVerbose mode\n"
     printf "\t[-m]\t\tEnable mbuffer\n"
-    printf "\t[-x excludes]\tFile with excluded filesystems, one per line (default: ${EXCLUDES})\n"
+    printf "\t[-x file]\tFile with excluded filesystems (default: ${EXCLUDES_DEFAULT} (.\$host appended if specified)\n"
     printf "\tfilesystem\tDestination zfs filesystem\n"
     exit 1
 }
@@ -25,7 +26,7 @@ usage()
 while getopts "s:h:pnvmx:" _opt; do
     case "$_opt" in
     s) SRC_VOL="$OPTARG" ;;
-    h) HOST="$OPTARG" ; ssh="ssh ${HOST} " ;;
+    h) HOST="$OPTARG" ;;
     p) PURGE_SS="YES" ;;
     n) DRY_RUN="YES" ;;
     v) VERBOSE="YES" ;;
@@ -39,6 +40,13 @@ if [ $# -ne 1 ]; then
     usage
 fi
 DEST_FS="$1"
+
+if [ -z "${EXCLUDES}" ]; then
+    EXCLUDES=${EXCLUDES_DEFAULT}
+    if [ -n "${HOST}" ]; then
+         EXCLUDES="${EXCLUDES}.${HOST}"
+    fi
+fi
 
 
 # $1 - command(s) to run
@@ -101,11 +109,16 @@ send()
 }
 
 
-
 # get all the snapshots (once each for source & dest)
 # these are the only zfs calls (besides send & recv)
-SRC_LIST=$( zfs list -r -H -o name -t snapshot -s creation ${SRC_VOL} 2>/dev/null )
-DST_LIST=$( ${ssh}zfs list -r -H -o name -t snapshot -s creation "${DEST_FS}" 2>/dev/null )
+OLD_DRY_RUN=${DRY_RUN}
+OLD_VERBOSE=${VERBOSE}
+DRY_RUN=
+VERBOSE=
+SRC_LIST=$( run "zfs list -r -H -o name -t snapshot -s creation ${SRC_VOL} 2>/dev/null" )
+DST_LIST=$( run_dest "zfs list -r -H -o name -t snapshot -s creation \"${DEST_FS}\" 2>/dev/null" )
+DRY_RUN=${OLD_DRY_RUN}
+VERBOSE=${OLD_VERBOSE}
 
 # trim the destination (recursively) from the list of sources (when we aren't shipping to another host)
 if [ -z "${HOST}" ]; then
@@ -118,7 +131,7 @@ DST_FS_LIST=$( echo "${DST_LIST}" | cut -s -d @ -f 1 | sort | uniq )
 
 # find destination filesystems not found on the source
 for dest_fs in $( echo "${DST_FS_LIST}" | sed "s|^${DEST_FS}/||g" ); do
-    if [ "${dest_fs}" = "" ]; then continue; fi
+    if [ -z "${dest_fs}" ]; then continue; fi
 
     if [ -z "$( echo "${SRC_FS_LIST}" | grep -e "^${dest_fs}$" )" ]; then
         extra_fs="${extra_fs} ${DEST_FS}/${dest_fs}"

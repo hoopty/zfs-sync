@@ -1,36 +1,32 @@
 #!/bin/sh
 
-SRC_VOL=
-HOST=
-DRY_RUN=
-PURGE_SS=
-VERBOSE=
-MBUFFER=
-EXCLUDES=
-EXCLUDES_DEFAULT="/usr/local/etc/zfs-sync.excludes"
+SSH_ARGS="-c arfour128"
+EXCLUDES_BASE="/usr/local/etc/zfs-sync.excludes"
 
 usage()
 {
-    echo "USAGE: $0 [-s volume] [-p type] [-h host] [-n] [-v] [-x excludes] filesystem"
+    echo "USAGE: $0 [-s volume] [-T host] [-a ssh_args] [-p] [-m] [-n] [-v] [-x excludes] destination"
     printf "\t[-s vol]\tSource zfs volume\n"
-    printf "\t[-h host]\tDestination hostname (for remote syncing)\n"
-    printf "\t[-p]\t\tPurge stale snaphots on the destination (that are more recent that the latest common ss)\n"
+    printf "\t[-T host]\tTarget [user@]hostname (for remote syncing, uses ssh)\n"
+    printf "\t[-a ssh_args]\tUsed for ssh commands executed on the Target host (default: ${SSH_ARGS})\n"
+    printf "\t[-p]\t\tPurge stale snaphots on the target (that are more recent that the latest common ss)\n"
+    printf "\t[-m]\t\tEnable mbuffer\n"
     printf "\t[-n]\t\tDry run\n"
     printf "\t[-v]\t\tVerbose mode\n"
-    printf "\t[-m]\t\tEnable mbuffer\n"
-    printf "\t[-x file]\tFile with excluded filesystems (default: ${EXCLUDES_DEFAULT} (.\$host appended if specified)\n"
-    printf "\tfilesystem\tDestination zfs filesystem\n"
+    printf "\t[-x file]\tFile with excluded filesystems (one per line)\n"
+    printf "\tdestination\tDestination zfs filesystem\n"
     exit 1
 }
 
-while getopts "s:h:pnvmx:" _opt; do
+while getopts "s:T:a:pmnvx:" _opt; do
     case "$_opt" in
     s) SRC_VOL="$OPTARG" ;;
-    h) HOST="$OPTARG" ;;
+    T) TARGET="$OPTARG" ;;
+    a) SSH_ARGS="$OPTARG" ;;
     p) PURGE_SS="YES" ;;
+    m) MBUFFER="YES" ;;
     n) DRY_RUN="YES" ;;
     v) VERBOSE="YES" ;;
-    m) MBUFFER="YES" ;;
     x) EXCLUDES="$OPTARG" ;;
     *) usage ;;
     esac
@@ -42,10 +38,15 @@ fi
 DEST_FS="$1"
 
 if [ -z "${EXCLUDES}" ]; then
-    EXCLUDES=${EXCLUDES_DEFAULT}
-    if [ -n "${HOST}" ]; then
-         EXCLUDES="${EXCLUDES}.${HOST}"
+    EXCLUDES="${EXCLUDES_BASE}"
+    if [ -n "${TARGET}" ]; then
+        EXCLUDES="${EXCLUDES}-${TARGET}"
     fi
+    dest_dir="$( echo ${DEST_FS} | sed 's|/|_|g' )"
+    EXCLUDES="${EXCLUDES}-${dest_dir}"
+fi
+if [ ! -f "${EXCLUDES}" ]; then
+    echo "WARNING: Excludes file ${EXCLUDES} doesn't exist."
 fi
 
 
@@ -67,8 +68,8 @@ run()
 run_dest()
 {
     CMD="$1"
-    if [ -n "${HOST}" ]; then
-        CMD="ssh ${HOST} ${CMD}"
+    if [ -n "${TARGET}" ]; then
+        CMD="ssh ${SSH_ARGS} ${TARGET} ${CMD}"
     fi
 
     run "${CMD}"
@@ -82,16 +83,15 @@ send()
     mbuffer_args="-q -s 128k"
 
     CMD="zfs send $1 | "
-    if [ -n "${HOST}" ]; then
+    if [ -n "${TARGET}" ]; then
         if [ -n "${MBUFFER}" ]; then
-            CMD="${CMD}mbuffer ${mbuffer_args} | "
+            CMD="${CMD}/usr/local/bin/mbuffer ${mbuffer_args} | "
         fi
-        ssh_args="-c arcfour128"
-        CMD="${CMD}ssh ${ssh_args} ${HOST} \""
+        CMD="${CMD}ssh ${SSH_ARGS} ${TARGET} \""
     fi
 
     if [ -n "${MBUFFER}" ]; then
-        CMD="${CMD}mbuffer ${mbuffer_args} | "
+        CMD="${CMD}/usr/local/bin/mbuffer ${mbuffer_args} | "
     fi
 
     recv_args=
@@ -101,7 +101,7 @@ send()
     recv_args="${recv_args}-F"
     CMD="${CMD}zfs receive ${recv_args} $2"
 
-    if [ -n "${HOST}" ]; then
+    if [ -n "${TARGET}" ]; then
         CMD="${CMD}\""
     fi
 
@@ -121,7 +121,7 @@ DRY_RUN=${OLD_DRY_RUN}
 VERBOSE=${OLD_VERBOSE}
 
 # trim the destination (recursively) from the list of sources (when we aren't shipping to another host)
-if [ -z "${HOST}" ]; then
+if [ -z "${TARGET}" ]; then
     SRC_LIST=$( echo "${SRC_LIST}" | grep -v -e "^${DEST_FS}" )
 fi
 
@@ -153,7 +153,7 @@ for src_fs in ${SRC_FS_LIST}; do
     extra_snapshots=
 
     # skip excluded filesystems (if specified)
-    if [ -n "$( echo "${src_fs}" | grep -f "${EXCLUDES}" )" ]; then
+    if [ -f "${EXCLUDES}" -a -n "$( echo "${src_fs}" | grep -f "${EXCLUDES}" )" ]; then
         excluded_fs="${excluded_fs} ${src_fs}"
         continue
     fi
@@ -184,8 +184,8 @@ for src_fs in ${SRC_FS_LIST}; do
     # no matching snapshots were found, (re)send filesystem
     if [ -z "${latest_match}" ]; then
         if [ -n "$( echo "${DST_FS_LIST}" | grep -e "^${dest}" )" ]; then
-
-            run "zfs destroy -r ${dest}"
+            echo "Removing ${dest} (for rebuild)..."
+            run_dest "zfs destroy -r ${dest}"
         fi
 
         # find the earliest source snapshot

@@ -9,6 +9,7 @@ usage()
     printf "\t[-s vol]\tSource zfs volume\n"
     printf "\t[-T host]\tTarget [user@]hostname (for remote syncing, uses ssh)\n"
     printf "\t[-a ssh_args]\tUsed for ssh commands executed on the Target host (default: ${SSH_ARGS})\n"
+    printf "\t[-r dir]\tDirectory to send redirected zfs send files\n"
     printf "\t[-p]\t\tPurge stale snaphots on the target (that are more recent that the latest common ss)\n"
     printf "\t[-m]\t\tEnable mbuffer\n"
     printf "\t[-n]\t\tDry run\n"
@@ -19,11 +20,12 @@ usage()
     exit 1
 }
 
-while getopts "s:T:a:pmnvx:" _opt; do
+while getopts "s:T:a:r:pmnvdx:" _opt; do
     case "$_opt" in
     s) SRC_VOL="$OPTARG" ;;
     T) TARGET="$OPTARG" ;;
     a) SSH_ARGS="$OPTARG" ;;
+    r) REDIRECT="$OPTARG" ;;
     p) PURGE_SS="YES" ;;
     m) MBUFFER="YES" ;;
     n) DRY_RUN="YES" ;;
@@ -78,17 +80,31 @@ run_dest()
 }
 
 
-# $1 - source snapshot (and zfs send args)
-# $2 - destination filesystem (and zfs receive args)
+# $1 - source snapshot
+# $2 - destination filesystem
+# $3 - incremental snapshot to send differences since
 send()
 {
-    if [ -n "${VERBOSE}" ]; then
-        eval "zfs send -nv $1"
+    if [ -n "$3" ]; then
+        send_args="-I @$3 $1"
+    else
+        send_args="$1"
     fi
 
-    mbuffer_args="-q -s 128k"
+    zfs send -nv ${send_args}
 
-    CMD="zfs send $1 | "
+    CMD="zfs send ${send_args}"
+
+    if [ -n "${REDIRECT}" ]; then
+        file=$( echo "${1}" | sed "s|/|_|g" )
+        CMD="${CMD} > ${REDIRECT}/${file}.zfs"
+        run "${CMD}"
+        return
+    fi
+
+    CMD="${CMD} | "
+
+    mbuffer_args="-q -s 128k"
     if [ -n "${TARGET}" ]; then
         if [ -n "${MBUFFER}" ]; then
             CMD="${CMD}/usr/local/bin/mbuffer ${mbuffer_args} | "
@@ -224,7 +240,7 @@ for src_fs in ${SRC_FS_LIST}; do
         echo "Skipping ${dest}, it is current (@${dst_last_ss})..."
     else
         echo "Updating ${dest} from ${src_fs}@${src_last_ss} (since @${latest_match})..."
-        send "-I @${latest_match} ${src_fs}@${src_last_ss}" "${dest}"
+        send "${src_fs}@${src_last_ss}" "${dest}" "${latest_match}"
     fi
 
     echo

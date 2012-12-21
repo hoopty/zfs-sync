@@ -13,6 +13,7 @@ usage()
     printf "\t[-m]\t\tEnable mbuffer\n"
     printf "\t[-n]\t\tDry run\n"
     printf "\t[-v]\t\tVerbose mode\n"
+    printf "\t[-d]\t\tDebug mode\n"
     printf "\t[-x file]\tFile with excluded filesystems (one per line)\n"
     printf "\tdestination\tDestination zfs filesystem\n"
     exit 1
@@ -27,6 +28,7 @@ while getopts "s:T:a:pmnvx:" _opt; do
     m) MBUFFER="YES" ;;
     n) DRY_RUN="YES" ;;
     v) VERBOSE="YES" ;;
+    d) DEBUG="YES" ;;
     x) EXCLUDES="$OPTARG" ;;
     *) usage ;;
     esac
@@ -53,7 +55,7 @@ fi
 # $1 - command(s) to run
 run()
 {
-    if [ -n "${DRY_RUN}" -o -n "${VERBOSE}" ]; then
+    if [ -n "${DEBUG}" ]; then
         echo "$1"
     fi
     if [ -n "${DRY_RUN}" ]; then
@@ -80,6 +82,10 @@ run_dest()
 # $2 - destination filesystem (and zfs receive args)
 send()
 {
+    if [ -n "${VERBOSE}" ]; then
+        eval "zfs send -nv $1"
+    fi
+
     mbuffer_args="-q -s 128k"
 
     CMD="zfs send $1 | "
@@ -112,13 +118,13 @@ send()
 # get all the snapshots (once each for source & dest)
 # these are the only zfs calls (besides send & recv)
 OLD_DRY_RUN=${DRY_RUN}
-OLD_VERBOSE=${VERBOSE}
+OLD_DEBUG=${DEBUG}
 DRY_RUN=
-VERBOSE=
+DEBUG=
 SRC_LIST=$( run "zfs list -r -H -o name -t snapshot -s creation ${SRC_VOL} 2>/dev/null" )
 DST_LIST=$( run_dest "zfs list -r -H -o name -t snapshot -s creation \"${DEST_FS}\" 2>/dev/null" )
 DRY_RUN=${OLD_DRY_RUN}
-VERBOSE=${OLD_VERBOSE}
+DEBUG=${OLD_DEBUG}
 
 # trim the destination (recursively) from the list of sources (when we aren't shipping to another host)
 if [ -z "${TARGET}" ]; then

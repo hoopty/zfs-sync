@@ -110,13 +110,13 @@ send()
     mbuffer_args="-q -s 128k"
     if [ -n "${TARGET}" ]; then
         if [ -n "${MBUFFER}" ]; then
-            CMD="${CMD}/usr/local/bin/mbuffer ${mbuffer_args} | "
+            CMD="${CMD}/usr/local/bin/mbuffer ${mbuffer_args} 2>/dev/null | "
         fi
         CMD="${CMD}ssh ${SSH_ARGS} ${TARGET} \""
     fi
 
     if [ -n "${MBUFFER}" ]; then
-        CMD="${CMD}/usr/local/bin/mbuffer ${mbuffer_args} | "
+        CMD="${CMD}/usr/local/bin/mbuffer ${mbuffer_args} 2>/dev/null | "
     fi
 
     recv_args=

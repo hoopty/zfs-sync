@@ -39,7 +39,7 @@ shift $(($OPTIND - 1))
 if [ $# -ne 1 ]; then
     usage
 fi
-DEST_FS="$1"
+DEST_FS="${1}"
 
 if [ -z "${EXCLUDES}" ]; then
     EXCLUDES="${EXCLUDES_BASE}"
@@ -85,13 +85,16 @@ run_dest()
 # $3 - incremental snapshot to send differences since
 send()
 {
-    if [ -n "$3" ]; then
-        send_args="-I @$3 $1"
+    if [ -z "${3}" ]; then
+        echo -n "Sending ${1} to ${2}"
+        send_args="${1}"
     else
-        send_args="$1"
+        echo -n "Updating ${2} from ${1} (since @${3})"
+        send_args="-I @${3} ${1}"
     fi
 
-    zfs send -nv ${send_args}
+    size=$( zfs send -nv ${send_args} 2>&1 | tail -n 1 )
+    echo -n " ${size}"
 
     CMD="zfs send ${send_args}"
 
@@ -128,6 +131,8 @@ send()
     fi
 
     run "${CMD}"
+
+    echo "."
 }
 
 
@@ -213,7 +218,6 @@ for src_fs in ${SRC_FS_LIST}; do
         # find the earliest source snapshot
         src_first_ss=$( echo "${SRC_LIST}" | grep -e "^${src_fs}@" | head -n 1 | cut -d @ -f 2 )
 
-        echo "Sending ${src_fs}@${src_first_ss} to ${dest}..."
         send "${src_fs}@${src_first_ss}" "${dest}"
         latest_match="${src_first_ss}"
         dst_last_ss="${src_first_ss}"
@@ -237,13 +241,10 @@ for src_fs in ${SRC_FS_LIST}; do
 
     # send incremental, skip if the destination is up-to-date
     if [ "${dst_last_ss}" = "${src_last_ss}" ]; then
-        echo "Skipping ${dest}, it is current (@${dst_last_ss})..."
+        echo "Skipping ${dest}, it is current (@${dst_last_ss})."
     else
-        echo "Updating ${dest} from ${src_fs}@${src_last_ss} (since @${latest_match})..."
         send "${src_fs}@${src_last_ss}" "${dest}" "${latest_match}"
     fi
-
-    echo
 done
 
 if [ -n "${VERBOSE}" -a -n "${excluded_fs}" ]; then

@@ -85,16 +85,18 @@ run_dest()
 # $3 - incremental snapshot to send differences since
 send()
 {
+    message=
+
     if [ -z "${3}" ]; then
-        echo -n "Sending ${1} to ${2}"
+        message="${message}Sending ${1} to ${2}"
         send_args="${1}"
     else
-        echo -n "Updating ${2} from ${1} (since @${3})"
+        message="${message}Updating ${2} from ${1} (since @${3})"
         send_args="-I @${3} ${1}"
     fi
 
     size=$( zfs send -nv ${send_args} 2>&1 | tail -n 1 )
-    echo -n " ${size}"
+    message="${message} ${size}"
 
     CMD="zfs send ${send_args}"
 
@@ -132,7 +134,8 @@ send()
 
     run "${CMD}"
 
-    echo "."
+    message="${message}."
+    echo "${message}"
 }
 
 
@@ -174,13 +177,17 @@ fi
 # iterate all the source filesystems
 for src_fs in ${SRC_FS_LIST}; do
     dest="${DEST_FS}/${src_fs}"
+    #dest=$( echo "${src_fs}" | sed "s|^${SRC_VOL}/||g" )
+    #dest="${DEST_FS}/${dest}"
     dst_first_ss=
     dst_last_ss=
     latest_match=
     extra_snapshots=
 
     # skip excluded filesystems (if specified)
-    if [ -f "${EXCLUDES}" -a -n "$( echo "${src_fs}" | grep -f "${EXCLUDES}" )" ]; then
+    if [ ! -f "${EXCLUDES}" ]; then
+        # do nothing
+    elif [ -n "$( echo "${src_fs}" | grep -f "${EXCLUDES}" )" ]; then
         excluded_fs="${excluded_fs} ${src_fs}"
         continue
     fi
@@ -248,6 +255,7 @@ for src_fs in ${SRC_FS_LIST}; do
 done
 
 if [ -n "${VERBOSE}" -a -n "${excluded_fs}" ]; then
+    echo
     echo "These filesystems were excluded:"
     echo "${excluded_fs}" | sed -e 's|^ *||g' | tr ' ' '\n'
     echo

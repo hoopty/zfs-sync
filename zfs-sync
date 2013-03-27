@@ -85,18 +85,22 @@ run_dest()
 # $3 - incremental snapshot to send differences since
 send()
 {
-    message=
-
     if [ -z "${3}" ]; then
-        message="${message}Sending ${1} to ${2}"
+        msg="Sending ${1} to ${2}"
         send_args="${1}"
     else
-        message="${message}Updating ${2} from ${1} (since @${3})"
+        snapshot=$( echo ${1} | cut -d @ -f 2 )
+        msg="Updating ${2} to @${snapshot} since @${3}"
         send_args="-I @${3} ${1}"
     fi
 
-    size=$( zfs send -nv ${send_args} 2>&1 | tail -n 1 )
-    message="${message} ${size}"
+    size=$( zfs send -nv ${send_args} 2>&1 | tail -n 1 | sed "s|total estimated size is ||g" )
+    if [ "${size}" = "0" -a -z "${VERBOSE}" ]; then
+        # skip echoing zfs snapshots that look empty
+        msg=
+    else
+        msg="${msg} (size=${size})"
+    fi
 
     CMD="zfs send ${send_args}"
 
@@ -132,10 +136,10 @@ send()
         CMD="${CMD}\""
     fi
 
+    if [ -n "${msg}" ]; then
+        echo ${msg}
+    fi
     run "${CMD}"
-
-    message="${message}."
-    echo "${message}"
 }
 
 
@@ -176,9 +180,9 @@ fi
 
 # iterate all the source filesystems
 for src_fs in ${SRC_FS_LIST}; do
-    dest="${DEST_FS}/${src_fs}"
-    #dest=$( echo "${src_fs}" | sed "s|^${SRC_VOL}/||g" )
-    #dest="${DEST_FS}/${dest}"
+    #dest="${DEST_FS}/${src_fs}"
+    dest=$( echo "${src_fs}" | sed "s|^${SRC_VOL}/||g" )
+    dest="${DEST_FS}/${dest}"
     dst_first_ss=
     dst_last_ss=
     latest_match=
@@ -256,7 +260,7 @@ done
 
 if [ -n "${VERBOSE}" -a -n "${excluded_fs}" ]; then
     echo
-    echo "These filesystems were excluded:"
+    echo "These source filesystems were excluded:"
     echo "${excluded_fs}" | sed -e 's|^ *||g' | tr ' ' '\n'
     echo
 fi

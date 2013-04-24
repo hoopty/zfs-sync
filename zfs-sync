@@ -156,7 +156,7 @@ DEBUG=${OLD_DEBUG}
 
 # trim the destination (recursively) from the list of sources (when we aren't shipping to another host)
 if [ -z "${TARGET}" ]; then
-    SRC_LIST=$( echo "${SRC_LIST}" | grep -v -e "^${DEST_FS}" )
+    SRC_LIST=$( echo "${SRC_LIST}" | grep -v -e "^${DEST_FS}/" )
 fi
 
 # derive the filesystems from eash full list (of snapshots)
@@ -183,6 +183,7 @@ for src_fs in ${SRC_FS_LIST}; do
     #dest="${DEST_FS}/${src_fs}"
     dest=$( echo "${src_fs}" | sed "s|^${SRC_VOL}/||g" )
     dest="${DEST_FS}/${dest}"
+    src_first_ss=
     dst_first_ss=
     dst_last_ss=
     latest_match=
@@ -216,6 +217,9 @@ for src_fs in ${SRC_FS_LIST}; do
         dst_last_ss="${snapshot}"
     done
 
+    # find the earliest source snapshot
+    src_first_ss=$( echo "${SRC_LIST}" | grep -e "^${src_fs}@" | head -n 1 | cut -d @ -f 2 )
+
     # find the latest source snapshot
     src_last_ss=$( echo "${SRC_LIST}" | grep -e "^${src_fs}@" | tail -n 1 | cut -d @ -f 2 )
 
@@ -225,9 +229,6 @@ for src_fs in ${SRC_FS_LIST}; do
             echo "Removing ${dest} (for rebuild)..."
             run_dest "zfs destroy -r ${dest}"
         fi
-
-        # find the earliest source snapshot
-        src_first_ss=$( echo "${SRC_LIST}" | grep -e "^${src_fs}@" | head -n 1 | cut -d @ -f 2 )
 
         send "${src_fs}@${src_first_ss}" "${dest}"
         latest_match="${src_first_ss}"
@@ -255,6 +256,10 @@ for src_fs in ${SRC_FS_LIST}; do
         echo "Skipping ${dest}, it is current (@${dst_last_ss})."
     else
         send "${src_fs}@${src_last_ss}" "${dest}" "${latest_match}"
+    fi
+
+    if [ -n "${DEBUG}" -a "${dst_first_ss}" -a "${dst_first_ss}" != "${src_first_ss}" ]; then
+        echo "  Destination snapshots start at @${dst_first_ss} and source starts with @${src_first_ss}."
     fi
 done
 

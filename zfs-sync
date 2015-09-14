@@ -5,28 +5,30 @@ EXCLUDES_BASE="/usr/local/etc/zfs-sync.excludes"
 
 usage()
 {
-    echo "USAGE: $0 [-s volume] [-T host] [-a ssh_args] [-p] [-m] [-n] [-v] [-x excludes] destination"
-    printf "\t[-s vol]\tSource zfs volume\n"
+    echo "USAGE: $0 [-s volume] [-T host] [-a ssh_args] [-p type] [-c] [-m] [-n] [-v] [-x excludes] destination"
+    printf "\t[-s vol]\tSource zfs volume (defaults to all)\n"
     printf "\t[-T host]\tTarget [user@]hostname (for remote syncing, uses ssh)\n"
-    printf "\t[-a ssh_args]\tUsed for ssh commands executed on the Target host (default: ${SSH_ARGS})\n"
+    printf "\t[-a ssh_args]\tUsed for additional ssh commands executed on the Target host (default: ${SSH_ARGS})\n"
     printf "\t[-r dir]\tDirectory to send redirected zfs send files\n"
-    printf "\t[-p]\t\tPurge stale snaphots on the target (that are more recent that the latest common ss)\n"
+    printf "\t[-c]\t\tClean (destroy) snaphots on the destination not on the source (more recent that the latest common ss)\n"
+    printf "\t[-p type]\tPurge (destroy) snaphots on the destination not on the source, limiting to type (i.e. daily, weekly, monthly)\n"
     printf "\t[-m]\t\tEnable mbuffer\n"
     printf "\t[-n]\t\tDry run\n"
     printf "\t[-v]\t\tVerbose mode\n"
     printf "\t[-d]\t\tDebug mode\n"
-    printf "\t[-x file]\tFile with excluded filesystems (one per line)\n"
+    printf "\t[-x file]\tFile with list of filesystems to exclude (one per line)\n"
     printf "\tdestination\tDestination zfs filesystem\n"
     exit 1
 }
 
-while getopts "s:T:a:r:pmnvdx:" _opt; do
+while getopts "s:T:a:r:cp:mnvdx:" _opt; do
     case "$_opt" in
     s) SRC_VOL="$OPTARG" ;;
     T) TARGET="$OPTARG" ;;
     a) SSH_ARGS="$OPTARG" ;;
     r) REDIRECT="$OPTARG" ;;
-    p) PURGE_SS="YES" ;;
+    c) TRIM_SS="YES" ;;
+    p) PURGE_TYPE="$OPTARG" ;;
     m) MBUFFER="YES" ;;
     n) DRY_RUN="YES" ;;
     v) VERBOSE="YES" ;;
@@ -142,6 +144,12 @@ send()
     run "${CMD}"
 }
 
+# $1 - needle
+# $2 - haystack
+contains() { case $2 in *$1*) true;; *) false;; esac; }
+beginswith() { case "$2" in $1*) true;; *) false;; esac; }
+
+
 
 # get all the snapshots (once each for source & dest)
 # these are the only zfs calls (besides send & recv)
@@ -237,13 +245,13 @@ for src_fs in ${SRC_FS_LIST}; do
 
     # purge snapshots on the destination no longer on the source (newer than the most recent common snapshot)
     # we do this before the incremental sync to trim out any snapshots that may make the "zfs recv -F" complain
-    if [ -n "${PURGE_SS}" -a -n "${extra_snapshots}" ]; then
+    if [ -n "${TRIM_SS}" -a -n "${extra_snapshots}" ]; then
         match_found=
         for dest_ss in $( echo "${DST_LIST}" | grep -e "^${dest}@" ); do
             snapshot=$( echo ${dest_ss} | cut -d @ -f 2 )
 
             if [ -n "${match_found}" ]; then
-                echo "Purging ${dest}@${snapshot}..."
+                echo "Trimming ${dest}@${snapshot}..."
                 run_dest "zfs destroy ${dest}@${snapshot}"
             elif [ "${snapshot}" = "${latest_match}" ]; then
                match_found="${snapshot}"
@@ -260,6 +268,16 @@ for src_fs in ${SRC_FS_LIST}; do
 
     if [ -n "${DEBUG}" -a "${dst_first_ss}" -a "${dst_first_ss}" != "${src_first_ss}" ]; then
         echo "  Destination snapshots start at @${dst_first_ss} and source starts with @${src_first_ss}."
+    fi
+
+    # purge snapshots on the destination no longer on the source, limiting to snapshots beginning with the specified type
+    if [ -n "${PURGE_TYPE}" -a -n "${extra_snapshots}" ]; then
+        for snapshot in ${extra_snapshots}; do
+            if ! beginswith "${PURGE_TYPE}" "${snapshot}" ; then continue; fi
+
+            echo "Purging ${dest}@${snapshot}..."
+            run_dest "zfs destroy ${dest}@${snapshot}"
+        done
     fi
 done
 

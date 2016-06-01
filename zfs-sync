@@ -196,6 +196,7 @@ for src_fs in ${SRC_FS_LIST}; do
     dst_last_ss=
     latest_match=
     extra_snapshots=
+    purged_snapshots=
 
     # skip excluded filesystems (if specified)
     if [ ! -f "${EXCLUDES}" ]; then
@@ -253,6 +254,7 @@ for src_fs in ${SRC_FS_LIST}; do
             if [ -n "${match_found}" ]; then
                 echo "Trimming ${dest}@${snapshot}..."
                 run_dest "zfs destroy ${dest}@${snapshot}"
+            	purged_snapshots="${purged_snapshots} ${snapshot}"
             elif [ "${snapshot}" = "${latest_match}" ]; then
                match_found="${snapshot}"
             fi
@@ -273,7 +275,8 @@ for src_fs in ${SRC_FS_LIST}; do
     # purge snapshots on the destination no longer on the source, limiting to snapshots beginning with the specified type
     if [ -n "${PURGE_TYPE}" -a -n "${extra_snapshots}" ]; then
         for snapshot in ${extra_snapshots}; do
-            if ! beginswith "${PURGE_TYPE}" "${snapshot}" ; then continue; fi
+            if ! beginswith "${PURGE_TYPE}" "${snapshot}"; then continue; fi
+            if contains "${snapshot}" "${purged_snapshots}"; then continue; fi
 
             echo "Purging ${dest}@${snapshot}..."
             run_dest "zfs destroy ${dest}@${snapshot}"

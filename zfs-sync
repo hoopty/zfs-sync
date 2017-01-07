@@ -1,6 +1,6 @@
 #!/bin/sh
 
-SSH_ARGS="-c arfour128"
+SSH_ARGS="-c arcfour128,arcfour"
 EXCLUDES_BASE="/usr/local/etc/zfs-sync.excludes"
 
 usage()

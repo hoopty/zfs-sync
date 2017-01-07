@@ -1,0 +1,53 @@
+#!/bin/sh
+
+# If there is a global system configuration file, suck it in.
+#
+if [ -r /etc/defaults/periodic.conf ]
+then
+    . /etc/defaults/periodic.conf
+    source_periodic_confs
+fi
+
+LOG="/var/log/zfs-sync.log"
+HOST=$( hostname -s )
+
+zfs_sync_args='-c -p daily -m'
+ssh_args='-i /home/backup/.ssh/id_rsa'
+
+zfs_sync()
+{
+    echo
+
+    pool=$1
+    if echo ${pool} | grep -q ':' ; then
+        _host=$(echo ${pool} | cut -s -d : -f 1)
+        _pool=$(echo ${pool} | cut -s -d : -f 2)
+        echo "ZFS syncing to ${_pool} on ${_host}..." | tee -a ${LOG}
+        zfs-sync ${zfs_sync_args} -a "${ssh_args}" -T ${_host} ${_pool}/${HOST} | tee -a ${LOG}
+    else
+        _pool_imported=""
+        echo "ZFS syncing to ${pool}..." | tee -a ${LOG}
+        if ! $(zpool list ${pool} > /dev/null 2>&1) ; then
+            echo "Importing zpool ${pool}..." | tee -a ${LOG}
+            zpool import -N ${pool}
+            _pool_imported="YES"
+	fi
+        zfs-sync ${zfs_sync_args} ${pool}/${HOST} | tee -a ${LOG}
+	if [ -n "${_pool_imported}" ]; then
+            echo "Exporting zpool ${pool}..." | tee -a ${LOG}
+            zpool export ${pool}
+	fi
+    fi
+    echo
+}
+
+
+case "$zfs_sync_enable" in
+    [Yy][Ee][Ss])
+        for pool in ${zfs_sync_zpools}; do
+            zfs_sync ${pool}
+        done
+        ;;
+    *)
+        ;;
+esac

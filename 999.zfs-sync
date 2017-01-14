@@ -8,6 +8,8 @@ then
     source_periodic_confs
 fi
 
+PATH="$PATH:/usr/local/sbin"
+
 LOG="/var/log/zfs-sync.log"
 HOST=$( hostname -s )
 

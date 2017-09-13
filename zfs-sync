@@ -6,18 +6,18 @@ EXCLUDES_BASE="/usr/local/etc/zfs-sync.excludes"
 usage()
 {
     echo "USAGE: $0 [-s volume] [-T host] [-a ssh_args] [-p type] [-c] [-m] [-n] [-v] [-x excludes] destination"
-    printf "\t[-s vol]\tSource zfs volume (defaults to all)\n"
-    printf "\t[-T host]\tTarget [user@]hostname (for remote syncing, uses ssh)\n"
-    printf "\t[-a ssh_args]\tUsed for additional ssh commands executed on the Target host (default: ${SSH_ARGS})\n"
-    printf "\t[-r dir]\tDirectory to send redirected zfs send files\n"
-    printf "\t[-c]\t\tClean (destroy) snaphots on the destination not on the source (more recent that the latest common ss)\n"
-    printf "\t[-p type]\tPurge (destroy) snaphots on the destination not on the source, limiting to type (i.e. daily, weekly, monthly)\n"
-    printf "\t[-m]\t\tEnable mbuffer\n"
-    printf "\t[-n]\t\tDry run\n"
-    printf "\t[-v]\t\tVerbose mode\n"
-    printf "\t[-d]\t\tDebug mode\n"
-    printf "\t[-x file]\tFile with list of filesystems to exclude (one per line)\n"
-    printf "\tdestination\tDestination zfs filesystem\n"
+    printf "\\t[-s vol]\\tSource zfs volume (defaults to all)\\n"
+    printf "\\t[-T host]\\tTarget [user@]hostname (for remote syncing, uses ssh)\\n"
+    printf "\\t[-a ssh_args]\\tUsed for additional ssh commands executed on the Target host (default: %s)\\n" "${SSH_ARGS}"
+    printf "\\t[-r dir]\\tDirectory to send redirected zfs send files\\n"
+    printf "\\t[-c]\\t\\tClean (destroy) snaphots on the destination not on the source (more recent that the latest common ss)\\n"
+    printf "\\t[-p type]\\tPurge (destroy) snaphots on the destination not on the source, limiting to type (i.e. daily, weekly, monthly)\\n"
+    printf "\\t[-m]\\t\\tEnable mbuffer\\n"
+    printf "\\t[-n]\\t\\tDry run\\n"
+    printf "\\t[-v]\\t\\tVerbose mode\\n"
+    printf "\\t[-d]\\t\\tDebug mode\\n"
+    printf "\\t[-x file]\\tFile with list of filesystems to exclude (one per line)\\n"
+    printf "\\tdestination\\tDestination zfs filesystem\\n"
     exit 1
 }
 
@@ -37,7 +37,7 @@ while getopts "s:T:a:r:cp:mnvdx:" _opt; do
     *) usage ;;
     esac
 done
-shift $(($OPTIND - 1))
+shift $((OPTIND - 1))
 if [ $# -ne 1 ]; then
     usage
 fi
@@ -48,7 +48,7 @@ if [ -z "${EXCLUDES}" ]; then
     if [ -n "${TARGET}" ]; then
         EXCLUDES="${EXCLUDES}-${TARGET}"
     fi
-    dest_dir="$( echo ${DEST_FS} | sed 's|/|_|g' )"
+    dest_dir="$( echo "${DEST_FS}" | sed 's|/|_|g' )"
     EXCLUDES="${EXCLUDES}-${dest_dir}"
 fi
 if [ ! -f "${EXCLUDES}" ]; then
@@ -91,13 +91,13 @@ send()
         msg="Sending ${1} to ${2}"
         send_args="${1}"
     else
-        snapshot=$( echo ${1} | cut -d @ -f 2 )
+        snapshot=$( echo "${1}" | cut -d @ -f 2 )
         msg="Updating ${2} to @${snapshot} since @${3}"
         send_args="-I @${3} ${1}"
     fi
 
-    size=$( zfs send -nv ${send_args} 2>&1 | tail -n 1 | sed "s|total estimated size is ||g" )
-    if [ "${size}" = "0" -a -z "${VERBOSE}" ]; then
+    size=$( zfs send -nv "${send_args}" 2>&1 | tail -n 1 | sed "s|total estimated size is ||g" )
+    if [ "${size}" = "0" ] && [ -z "${VERBOSE}" ]; then
         # skip echoing zfs snapshots that look empty
         msg=
     else
@@ -139,7 +139,7 @@ send()
     fi
 
     if [ -n "${msg}" ]; then
-        echo ${msg}
+        echo "${msg}"
     fi
     run "${CMD}"
 }
@@ -172,15 +172,18 @@ SRC_FS_LIST=$( echo "${SRC_LIST}" | cut -s -d @ -f 1 | sort | uniq )
 DST_FS_LIST=$( echo "${DST_LIST}" | cut -s -d @ -f 1 | sort | uniq )
 
 # find destination filesystems not found on the source
-for dest_fs in $( echo "${DST_FS_LIST}" | sed "s|^${DEST_FS}/||g" ); do
-    if [ -z "${dest_fs}" ]; then continue; fi
+for dst_fs in $( echo "${DST_FS_LIST}" | sed "s|^${DEST_FS}/||g" ); do
+    if [ -z "${dst_fs}" ]; then continue; fi
 
-    if [ -z "$( echo "${SRC_FS_LIST}" | grep -e "^${dest_fs}$" )" ]; then
-        extra_fs="${extra_fs} ${DEST_FS}/${dest_fs}"
+    if echo "${SRC_FS_LIST}" | grep -q -e "^${dst_fs}$"; then
+        # do nothing
+        true
+    else
+        extra_fs="${extra_fs} ${DEST_FS}/${dst_fs}"
     fi
 done
 
-if [ -n "${VERBOSE}" -a -n "${extra_fs}" ]; then
+if [ -n "${VERBOSE}" ] && [ -n "${extra_fs}" ]; then
     echo "These destination filesystems do not exist on the source:"
     echo "${extra_fs}" | sed -e 's|^ *||g' | tr ' ' '\n'
     echo
@@ -201,14 +204,15 @@ for src_fs in ${SRC_FS_LIST}; do
     # skip excluded filesystems (if specified)
     if [ ! -f "${EXCLUDES}" ]; then
         # do nothing
-    elif [ -n "$( echo "${src_fs}" | grep -f "${EXCLUDES}" )" ]; then
+        true
+    elif echo "${src_fs}" | grep -q -f "${EXCLUDES}"; then
         excluded_fs="${excluded_fs} ${src_fs}"
         continue
     fi
 
     # roll through the destination snapshots
     for dest_ss in $( echo "${DST_LIST}" | grep -e "^${dest}@" ); do
-        snapshot=$( echo ${dest_ss} | cut -d @ -f 2 )
+        snapshot=$( echo "${dest_ss}" | cut -d @ -f 2 )
         source="${src_fs}@${snapshot}"
 
         if [ -z "${dst_first_ss}" ]; then
@@ -216,7 +220,7 @@ for src_fs in ${SRC_FS_LIST}; do
         fi
 
         # check to see if this destination snapshot exists on the source
-        if [ -n "$( echo "${SRC_LIST}" | grep -e "^${source}$" )" ]; then
+        if echo "${SRC_LIST}" | grep -q -e "^${source}$"; then
             latest_match="${snapshot}"
         else
             # keep track of extra snapshots no longer on the source
@@ -234,7 +238,7 @@ for src_fs in ${SRC_FS_LIST}; do
 
     # no matching snapshots were found, (re)send filesystem
     if [ -z "${latest_match}" ]; then
-        if [ -n "$( echo "${DST_FS_LIST}" | grep -e "^${dest}" )" ]; then
+        if echo "${DST_FS_LIST}" | grep -q -e "^${dest}"; then
             echo "Removing ${dest} (for rebuild)..."
             run_dest "zfs destroy -r ${dest}"
         fi
@@ -246,15 +250,15 @@ for src_fs in ${SRC_FS_LIST}; do
 
     # purge snapshots on the destination no longer on the source (newer than the most recent common snapshot)
     # we do this before the incremental sync to trim out any snapshots that may make the "zfs recv -F" complain
-    if [ -n "${TRIM_SS}" -a -n "${extra_snapshots}" ]; then
+    if [ -n "${TRIM_SS}" ] && [ -n "${extra_snapshots}" ]; then
         match_found=
         for dest_ss in $( echo "${DST_LIST}" | grep -e "^${dest}@" ); do
-            snapshot=$( echo ${dest_ss} | cut -d @ -f 2 )
+            snapshot=$( echo "${dest_ss}" | cut -d @ -f 2 )
 
             if [ -n "${match_found}" ]; then
                 echo "Trimming ${dest}@${snapshot}..."
                 run_dest "zfs destroy ${dest}@${snapshot}"
-            	purged_snapshots="${purged_snapshots} ${snapshot}"
+                purged_snapshots="${purged_snapshots} ${snapshot}"
             elif [ "${snapshot}" = "${latest_match}" ]; then
                match_found="${snapshot}"
             fi
@@ -268,12 +272,12 @@ for src_fs in ${SRC_FS_LIST}; do
         send "${src_fs}@${src_last_ss}" "${dest}" "${latest_match}"
     fi
 
-    if [ -n "${DEBUG}" -a "${dst_first_ss}" -a "${dst_first_ss}" != "${src_first_ss}" ]; then
+    if [ -n "${DEBUG}" ] && [ "${dst_first_ss}" ] && [ "${dst_first_ss}" != "${src_first_ss}" ]; then
         echo "  Destination snapshots start at @${dst_first_ss} and source starts with @${src_first_ss}."
     fi
 
     # purge snapshots on the destination no longer on the source, limiting to snapshots beginning with the specified type
-    if [ -n "${PURGE_TYPE}" -a -n "${extra_snapshots}" ]; then
+    if [ -n "${PURGE_TYPE}" ] && [ -n "${extra_snapshots}" ]; then
         for snapshot in ${extra_snapshots}; do
             if ! beginswith "${PURGE_TYPE}" "${snapshot}"; then continue; fi
             if contains "${snapshot}" "${purged_snapshots}"; then continue; fi
@@ -284,7 +288,7 @@ for src_fs in ${SRC_FS_LIST}; do
     fi
 done
 
-if [ -n "${VERBOSE}" -a -n "${excluded_fs}" ]; then
+if [ -n "${VERBOSE}" ] && [ -n "${excluded_fs}" ]; then
     echo
     echo "These source filesystems were excluded:"
     echo "${excluded_fs}" | sed -e 's|^ *||g' | tr ' ' '\n'

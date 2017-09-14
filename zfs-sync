@@ -66,8 +66,7 @@ run()
         return
     fi
 
-    eval "$1" || \
-        { echo "Error executing command: $1"; exit 1; }
+    eval "$1" || { echo "Error executing command: $1"; exit 1; }
 }
 
 # $1 - command(s) to run
@@ -96,7 +95,7 @@ send()
         send_args="-I @${3} ${1}"
     fi
 
-    size=$( zfs send -nv "${send_args}" 2>&1 | tail -n 1 | sed "s|total estimated size is ||g" )
+    size=$( zfs send -nv ${send_args} 2>&1 | tail -n 1 | sed "s|total estimated size is ||g" )
     if [ "${size}" = "0" ] && [ -z "${VERBOSE}" ]; then
         # skip echoing zfs snapshots that look empty
         msg=

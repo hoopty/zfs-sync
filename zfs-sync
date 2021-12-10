@@ -1,6 +1,6 @@
 #!/bin/sh
 
-SSH_ARGS="-c arcfour128,arcfour"
+SSH_ARGS=""
 EXCLUDES_BASE="/usr/local/etc/zfs-sync.excludes"
 
 usage()
@@ -117,13 +117,13 @@ send()
     mbuffer_args="-q -s 128k"
     if [ -n "${TARGET}" ]; then
         if [ -n "${MBUFFER}" ]; then
-            CMD="${CMD}/usr/local/bin/mbuffer ${mbuffer_args} 2>/dev/null | "
+            CMD="${CMD}mbuffer ${mbuffer_args} 2>/dev/null | "
         fi
         CMD="${CMD}ssh ${SSH_ARGS} ${TARGET} \""
     fi
 
     if [ -n "${MBUFFER}" ]; then
-        CMD="${CMD}/usr/local/bin/mbuffer ${mbuffer_args} 2>/dev/null | "
+        CMD="${CMD}mbuffer ${mbuffer_args} 2>/dev/null | "
     fi
 
     recv_args=
@@ -147,6 +147,7 @@ send()
 # $2 - haystack
 contains() { case $2 in *$1*) true;; *) false;; esac; }
 beginswith() { case "$2" in $1*) true;; *) false;; esac; }
+endswith() { case "$2" in *$1) true;; *) false;; esac; }
 
 
 
@@ -275,14 +276,19 @@ for src_fs in ${SRC_FS_LIST}; do
         echo "  Destination snapshots start at @${dst_first_ss} and source starts with @${src_first_ss}."
     fi
 
-    # purge snapshots on the destination no longer on the source, limiting to snapshots beginning with the specified type
+    # purge snapshots on the destination no longer on the source, limiting to snapshots with the specified type(s)
     if [ -n "${PURGE_TYPE}" ] && [ -n "${extra_snapshots}" ]; then
         for snapshot in ${extra_snapshots}; do
-            if ! beginswith "${PURGE_TYPE}" "${snapshot}"; then continue; fi
+            # skip purge for snapshot already marked above for purge
             if contains "${snapshot}" "${purged_snapshots}"; then continue; fi
 
-            echo "Purging ${dest}@${snapshot}..."
-            run_dest "zfs destroy ${dest}@${snapshot}"
+            # skip purge for snapshots that do not match the specified type(s)
+            for suffix in $(echo ${PURGE_TYPE} | tr "," "\n"); do
+                if endswith "${suffix}" "${snapshot}"; then
+	                echo "Purging ${dest}@${snapshot}..."
+                    run_dest "zfs destroy ${dest}@${snapshot}"
+		        fi
+	        done
         done
     fi
 done
@@ -293,4 +299,3 @@ if [ -n "${VERBOSE}" ] && [ -n "${excluded_fs}" ]; then
     echo "${excluded_fs}" | sed -e 's|^ *||g' | tr ' ' '\n'
     echo
 fi
-

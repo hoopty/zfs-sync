@@ -95,7 +95,7 @@ send()
         send_args="-I @${3} ${1}"
     fi
 
-    size=$( zfs send -nv ${send_args} 2>&1 | tail -n 1 | sed "s|total estimated size is ||g" )
+    size=$( zfs send -nv "${send_args}" 2>&1 | tail -n 1 | sed "s|total estimated size is ||g" )
     if [ "${size}" = "0" ] && [ -z "${VERBOSE}" ]; then
         # skip echoing zfs snapshots that look empty
         msg=
@@ -283,12 +283,12 @@ for src_fs in ${SRC_FS_LIST}; do
             if contains "${snapshot}" "${purged_snapshots}"; then continue; fi
 
             # skip purge for snapshots that do not match the specified type(s)
-            for suffix in $(echo ${PURGE_TYPE} | tr "," "\n"); do
+            for suffix in $( echo "${PURGE_TYPE}" | tr "," "\n" ); do
                 if endswith "${suffix}" "${snapshot}"; then
-	                echo "Purging ${dest}@${snapshot}..."
+                    echo "Purging ${dest}@${snapshot}..."
                     run_dest "zfs destroy ${dest}@${snapshot}"
-		        fi
-	        done
+                fi
+            done
         done
     fi
 done
